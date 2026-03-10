@@ -1,0 +1,47 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@300;400;700&family=ZCOOL+XiaoWei&display=swap');
+
+@theme {
+  --font-sans: "ZCOOL XiaoWei", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Ma Shan Zheng", serif;
+  --font-display: "ZCOOL XiaoWei", serif;
+  
+  --color-paper: #000000;
+  --color-ink: #C5A059;
+  --color-accent: #C5A059;
+  --color-gold: #C5A059;
+}
+
+body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  letter-spacing: 0.05em;
+}
+
+.retro-card {
+  background: #0a0a0a;
+  border: 1px solid rgba(197, 160, 89, 0.2);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+}
+
+.retro-border {
+  border: 1px solid var(--color-gold);
+}
+
+.paper-texture {
+  background-image: radial-gradient(circle at center, #1a1a1a 0%, #000000 100%);
+}
+
+/* Custom scrollbar for black/gold feel */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #000000;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-gold);
+  border-radius: 10px;
+}
+

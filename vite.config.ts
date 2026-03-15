@@ -1,54 +1,33 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
-import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
+import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
-    base: './', 
     plugins: [
       react(), 
-      tailwindcss(), 
+      tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.png'],
+        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
         manifest: {
-          name: 'Books App - 水云读书',
-          short_name: 'Books',
-          description: 'A PWA for managing books',
-          theme_color: '#F27D26',
-          background_color: '#FFFFFF',
-          display: 'standalone',
+          name: 'WaterCloud Literature',
+          short_name: 'WaterCloud',
+          description: 'A community for literature and reading enthusiasts.',
+          theme_color: '#ffffff',
           icons: [
             {
-              src: '/icon.png',
+              src: 'pwa-192x192.png',
               sizes: '192x192',
-              type: 'image/png',
-              purpose: 'any'
+              type: 'image/png'
             },
             {
-              src: '/icon.png',
+              src: 'pwa-512x512.png',
               sizes: '512x512',
-              type: 'image/png',
-              purpose: 'maskable'
-            }
-          ]
-        },
-        workbox: {
-          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-          runtimeCaching: [
-            {
-              urlPattern: /^https:\/\/.*\.(?:png|jpg|jpeg|svg|gif)$/,
-              handler: 'CacheFirst',
-              options: {
-                cacheName: 'images-cache',
-                expiration: {
-                  maxEntries: 50,
-                  maxAgeSeconds: 30 * 24 * 60 * 60 // 30 days
-                }
-              }
+              type: 'image/png'
             }
           ]
         }

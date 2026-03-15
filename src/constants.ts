@@ -53,6 +53,14 @@ export const translations = {
     userHome: "用户主页",
     readingBooks: "正在阅读",
     userAbstracts: "个人文摘",
+    persistenceWarning: "提示：当前为临时存储模式，数据可能在系统维护时重置。建议定期导出备份。",
+    exportData: "导出数据备份",
+    saving: "正在保存...",
+    profile: "个人中心",
+    preview: "预览",
+    pinned: "置顶",
+    postPreview: "发布预览",
+    share: "分享",
   },
   en: {
     appName: "WaterCloud",
@@ -106,5 +114,14 @@ export const translations = {
     userHome: "User Profile",
     readingBooks: "Reading",
     userAbstracts: "Abstracts",
+    persistenceWarning: "Note: Temporary storage mode. Data may reset during maintenance. Export backups regularly.",
+    exportData: "Export Backup",
+    saving: "Saving...",
+    profile: "Profile",
+    preview: "Preview",
+    pinned: "Pinned",
+    postPreview: "Post Preview",
+    share: "Share",
   }
-};
+}
+;

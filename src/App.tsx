@@ -11,10 +11,37 @@ import {
   ChevronLeft, 
   Globe,
   Image as ImageIcon,
-  PenTool
+  PenTool,
+  Download,
+  LogOut,
+  User as UserIcon,
+  Pin
 } from 'lucide-react';
 import { User, Book, Entry, CommunityPost, Comment, Activity, Language, Annotation, ActivityComment } from './types';
 import { translations } from './constants';
+import { compressImage } from './utils';
+import { auth, db } from './firebase';
+import { 
+  signInAnonymously, 
+  onAuthStateChanged, 
+  signOut 
+} from 'firebase/auth';
+import { 
+  doc, 
+  setDoc, 
+  getDoc, 
+  collection, 
+  addDoc, 
+  query, 
+  where, 
+  orderBy, 
+  onSnapshot,
+  updateDoc,
+  increment,
+  getDocs,
+  deleteDoc,
+  limit
+} from 'firebase/firestore';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -30,169 +57,181 @@ export default function App() {
   const [showAddBook, setShowAddBook] = useState(false);
   const [showAddEntry, setShowAddEntry] = useState(false);
   const [showAddActivity, setShowAddActivity] = useState(false);
+  const [showPreview, setShowPreview] = useState<{ entryId: string, bookId: string } | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const t = translations[lang];
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('watercloud_user');
-    if (savedUser) {
-      const parsedUser = JSON.parse(savedUser);
-      // Verify user exists in DB to prevent foreign key errors from stale localStorage
-      fetch(`/api/users/${parsedUser.id}`)
-        .then(async res => {
-          if (!res.ok) {
-            throw new Error(`User verification failed: ${res.status}`);
-          }
-          return res.json();
-        })
-        .then(data => {
-          if (data && data.id) {
-            setUser(data);
-            setView('home');
-          } else {
-            console.warn('User not found in DB, clearing localStorage');
-            localStorage.removeItem('watercloud_user');
-            setView('onboarding');
-          }
-        })
-        .catch(err => {
-          console.error('Error verifying user:', err);
-          localStorage.removeItem('watercloud_user');
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setUser({ id: firebaseUser.uid, nickname: userData.nickname, avatar: userData.avatar });
+          setView('home');
+        } else {
           setView('onboarding');
-        });
-    }
+        }
+      } else {
+        setUser(null);
+        setView('onboarding');
+      }
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
   }, []);
 
+  // Real-time listeners
   useEffect(() => {
-    if (user) {
-      fetchBooks();
-      fetchActivities();
-    }
-  }, [user]);
+    if (!user || !isAuthReady) return;
+
+    // Listen to books
+    const qBooks = query(collection(db, 'books'), where('authorUid', '==', user.id), orderBy('createdAt', 'desc'));
+    const unsubBooks = onSnapshot(qBooks, (snapshot) => {
+      setBooks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Book)));
+    });
+
+    // Listen to activities
+    const qActivities = query(collection(db, 'activities'), orderBy('createdAt', 'desc'), limit(50));
+    const unsubActivities = onSnapshot(qActivities, async (snapshot) => {
+      const activitiesData = await Promise.all(snapshot.docs.map(async (d) => {
+        const data = d.data();
+        const authorDoc = await getDoc(doc(db, 'users', data.authorUid));
+        const authorData = authorDoc.data();
+        
+        // Get participants
+        const qParticipants = query(collection(db, 'activity_participants'), where('activityId', '==', d.id));
+        const participantsSnap = await getDocs(qParticipants);
+        const participants = participantsSnap.docs.map(p => p.data() as { nickname: string, user_id: string });
+
+        return { 
+          id: d.id, 
+          ...data, 
+          author_nickname: authorData?.nickname, 
+          author_avatar: authorData?.avatar,
+          participants
+        } as Activity;
+      }));
+      setActivities(activitiesData);
+    });
+
+    return () => {
+      unsubBooks();
+      unsubActivities();
+    };
+  }, [user, isAuthReady]);
 
   useEffect(() => {
-    if (view === 'community') {
-      fetchCommunity();
-    }
-  }, [view]);
+    if (view === 'community' && isAuthReady) {
+      const qPosts = query(collection(db, 'community_posts'), orderBy('createdAt', 'desc'), limit(50));
+      const unsubPosts = onSnapshot(qPosts, async (snapshot) => {
+        const postsData = await Promise.all(snapshot.docs.map(async (d) => {
+          const data = d.data();
+          const authorDoc = await getDoc(doc(db, 'users', data.authorUid));
+          const authorData = authorDoc.data();
+          
+          let bookData: any = {};
+          if (data.bookId) {
+            const bDoc = await getDoc(doc(db, 'books', data.bookId));
+            bookData = bDoc.data() || {};
+          }
 
-  const fetchBooks = async () => {
-    if (!user) return;
-    const res = await fetch(`/api/books?userId=${user.id}`);
-    let data = await res.json();
-    
-    // Ensure "Essays" notebook exists
-    const essayTitle = lang === 'zh' ? '随笔' : 'Essays';
-    const hasEssays = data.some((b: Book) => b.title === essayTitle);
-    
-    if (!hasEssays) {
-      const createRes = await fetch('/api/books', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          userId: user.id, 
-          title: essayTitle, 
-          cover: 'https://picsum.photos/seed/essays/800/1200', 
-          description: lang === 'zh' ? '记录生活中的点滴感悟。' : 'Record bits of inspiration in life.' 
-        })
+          let entryData: any = {};
+          if (data.entryId) {
+            const eDoc = await getDoc(doc(db, 'entries', data.entryId));
+            entryData = eDoc.data() || {};
+          }
+
+          return { 
+            id: d.id, 
+            ...data, 
+            nickname: authorData?.nickname, 
+            avatar: authorData?.avatar,
+            book_title: bookData.title,
+            book_cover: bookData.cover,
+            entry_title: entryData.title,
+            entry_content: entryData.content
+          } as CommunityPost;
+        }));
+        setCommunityPosts(postsData);
       });
-      if (createRes.ok) {
-        const refreshRes = await fetch(`/api/books?userId=${user.id}`);
-        data = await refreshRes.json();
-      }
+      return () => unsubPosts();
     }
-    
-    setBooks(data);
-  };
-
-  const fetchEntries = async (bookId: number) => {
-    const res = await fetch(`/api/books/${bookId}/entries`);
-    const data = await res.json();
-    setEntries(data);
-  };
-
-  const fetchCommunity = async () => {
-    const res = await fetch('/api/community');
-    const data = await res.json();
-    setCommunityPosts(data);
-  };
-
-  const fetchActivities = async () => {
-    const res = await fetch('/api/activities');
-    const data = await res.json();
-    setActivities(data);
-  };
+  }, [view, isAuthReady]);
 
   const handleOnboarding = async (nickname: string, avatar: string) => {
     try {
-      const res = await fetch('/api/users', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nickname, avatar })
+      setIsSaving(true);
+      let uid = auth.currentUser?.uid;
+      if (!uid) {
+        const cred = await signInAnonymously(auth);
+        uid = cred.user.uid;
+      }
+      
+      const userData = {
+        nickname,
+        avatar,
+        createdAt: new Date().toISOString()
+      };
+      
+      await setDoc(doc(db, 'users', uid), userData);
+      
+      // Create default book
+      await addDoc(collection(db, 'books'), {
+        authorUid: uid,
+        title: lang === 'zh' ? '随笔' : 'Essays',
+        cover: 'https://picsum.photos/seed/essays/800/1200',
+        description: lang === 'zh' ? '记录生活中的点滴感悟。' : 'Recording moments of life.',
+        createdAt: new Date().toISOString()
       });
-      if (!res.ok) throw new Error('Failed to create user');
-      const data = await res.json();
-      const newUser = { id: data.id, nickname, avatar };
-      setUser(newUser);
-      localStorage.setItem('watercloud_user', JSON.stringify(newUser));
+
+      setUser({ id: uid, nickname, avatar });
       setView('home');
     } catch (error) {
       console.error('Onboarding error:', error);
-      alert(lang === 'zh' ? '创建用户失败，请稍后再试' : 'Failed to create user, please try again');
+      alert(lang === 'zh' ? '创建用户失败' : 'Failed to create user');
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  const [isSaving, setIsSaving] = useState(false);
-
   const handleAddBook = async (title: string, cover: string, description: string) => {
-    if (!user) {
-      alert(t.nicknameRequired);
-      return;
-    }
-    console.log('Adding book for user:', user.id);
+    if (!user) return;
     setIsSaving(true);
     try {
-      const res = await fetch('/api/books', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, title, cover, description })
+      await addDoc(collection(db, 'books'), {
+        authorUid: user.id,
+        title,
+        cover,
+        description,
+        createdAt: new Date().toISOString()
       });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Failed to add book');
-      }
-      await fetchBooks();
       setShowAddBook(false);
     } catch (error) {
       console.error('Add book error:', error);
-      alert(lang === 'zh' ? `添加书籍失败: ${error instanceof Error ? error.message : '未知错误'}` : `Failed to add book: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleAddActivity = async (title: string, announcement: string, location: string, time: string, posters: string[]) => {
-    if (!user) {
-      alert(t.nicknameRequired);
-      return;
-    }
-    console.log('Adding activity for user:', user.id);
+    if (!user) return;
     setIsSaving(true);
     try {
-      const res = await fetch('/api/activities', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, title, announcement, location, time, posters })
+      await addDoc(collection(db, 'activities'), {
+        authorUid: user.id,
+        title,
+        announcement,
+        location,
+        time,
+        posters,
+        createdAt: new Date().toISOString()
       });
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error || 'Failed to add activity');
-      }
-      await fetchActivities();
       setShowAddActivity(false);
     } catch (error) {
       console.error('Add activity error:', error);
-      alert(lang === 'zh' ? `发布活动失败: ${error instanceof Error ? error.message : '未知错误'}` : `Failed to add activity: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setIsSaving(false);
     }
@@ -200,49 +239,98 @@ export default function App() {
 
   const handleAddEntry = async (title: string, content: string, image: string, feelings: string) => {
     if (!selectedBook) return;
-    await fetch('/api/entries', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookId: selectedBook.id, title, content, image, feelings })
-    });
-    fetchEntries(selectedBook.id);
-    setShowAddEntry(false);
+    setIsSaving(true);
+    try {
+      await addDoc(collection(db, 'entries'), {
+        bookId: selectedBook.id,
+        title,
+        content,
+        image,
+        feelings,
+        createdAt: new Date().toISOString()
+      });
+      setShowAddEntry(false);
+      // Refresh entries
+      fetchEntries(selectedBook.id);
+    } catch (error) {
+      console.error('Add entry error:', error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleForwardToCommunity = async (entryId: number, content: string = '') => {
+  const fetchEntries = async (bookId: string) => {
+    const q = query(collection(db, 'entries'), where('bookId', '==', bookId), orderBy('createdAt', 'desc'));
+    const snap = await getDocs(q);
+    setEntries(snap.docs.map(d => ({ id: d.id, ...d.data() } as Entry)));
+  };
+
+  const handleForwardToCommunity = async (entryId: string, content: string = '') => {
     if (!user || !selectedBook) return;
-    await fetch('/api/community', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: user.id,
+    setIsSaving(true);
+    try {
+      await addDoc(collection(db, 'community_posts'), {
+        authorUid: user.id,
         bookId: selectedBook.id,
         entryId: entryId,
-        type: 'entry',
-        content: content
-      })
-    });
-    alert(lang === 'zh' ? '已转发至社区' : 'Forwarded to community');
-    if (view === 'community') fetchCommunity();
+        type: 'essay',
+        content: content,
+        likes: 0,
+        isPinned: false,
+        createdAt: new Date().toISOString()
+      });
+      setShowPreview(null);
+      alert(lang === 'zh' ? '已分享至社区' : 'Shared to community');
+    } catch (error) {
+      console.error('Forward error:', error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleLike = async (postId: number) => {
-    await fetch(`/api/community/${postId}/like`, { method: 'POST' });
-    fetchCommunity();
+  const handleLike = async (postId: string) => {
+    try {
+      await updateDoc(doc(db, 'community_posts', postId), {
+        likes: increment(1)
+      });
+    } catch (error) {
+      console.error('Like error:', error);
+    }
   };
 
-  const handleParticipate = async (activityId: number, nickname: string) => {
+  const handleParticipate = async (activityId: string, nickname: string) => {
     if (!user) return;
-    await fetch(`/api/activities/${activityId}/participate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: user.id, nickname })
-    });
-    alert(t.participateSuccess);
-    fetchActivities();
+    try {
+      await addDoc(collection(db, 'activity_participants'), {
+        activityId,
+        authorUid: user.id,
+        nickname,
+        createdAt: new Date().toISOString()
+      });
+      alert(t.participateSuccess);
+    } catch (error) {
+      console.error('Participate error:', error);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setUser(null);
+    setView('onboarding');
   };
 
   const toggleLang = () => setLang(l => l === 'zh' ? 'en' : 'zh');
+
+  if (!isAuthReady) {
+    return (
+      <div className="min-h-screen bg-paper flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="font-serif italic opacity-60">正在连接云端... (Connecting to cloud...)</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen paper-texture flex flex-col">
@@ -255,9 +343,14 @@ export default function App() {
             {t.switchLang}
           </button>
           {user && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm italic">{user.nickname}</span>
-              <img src={user.avatar} className="w-8 h-8 rounded-full border border-accent/20 object-cover" referrerPolicy="no-referrer" />
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm italic">{user.nickname}</span>
+                <img src={user.avatar} className="w-8 h-8 rounded-full border border-accent/20 object-cover" referrerPolicy="no-referrer" />
+              </div>
+              <button onClick={handleLogout} className="text-ink/40 hover:text-accent transition-colors" title="Logout">
+                <LogOut size={18} />
+              </button>
             </div>
           )}
         </div>
@@ -292,7 +385,7 @@ export default function App() {
                 entries={entries}
                 onBack={() => setView('home')}
                 onAddEntry={() => setShowAddEntry(true)}
-                onForward={handleForwardToCommunity}
+                onForward={(entryId) => setShowPreview({ entryId, bookId: selectedBook.id })}
                 lang={lang}
               />
             </motion.div>
@@ -354,6 +447,7 @@ export default function App() {
           <NavButton active={view === 'home'} icon={<BookIcon />} label={t.myBooks} onClick={() => setView('home')} />
           <NavButton active={view === 'community'} icon={<Users />} label={t.community} onClick={() => setView('community')} />
           <NavButton active={view === 'activities'} icon={<PenTool />} label={t.activities} onClick={() => setView('activities')} />
+          <NavButton active={view === 'profile' && viewingUser?.id === user.id} icon={<UserIcon />} label={t.profile} onClick={() => { setViewingUser(user); setView('profile'); }} />
         </nav>
       )}
 
@@ -365,13 +459,32 @@ export default function App() {
       )}
       {showAddEntry && (
         <Modal title={t.writeEntry} onClose={() => setShowAddEntry(false)}>
-          <AddEntryForm t={t} onSubmit={handleAddEntry} onCancel={() => setShowAddEntry(false)} />
+          <AddEntryForm t={t} onSubmit={handleAddEntry} onCancel={() => setShowAddEntry(false)} lang={lang} />
         </Modal>
       )}
       {showAddActivity && (
         <Modal title={t.addActivity} onClose={() => setShowAddActivity(false)}>
           <AddActivityForm t={t} onSubmit={handleAddActivity} onCancel={() => setShowAddActivity(false)} isSaving={isSaving} lang={lang} />
         </Modal>
+      )}
+      {showPreview && (
+        <Modal title={t.postPreview} onClose={() => setShowPreview(null)}>
+          <PostPreview 
+            t={t} 
+            entryId={showPreview.entryId} 
+            bookId={showPreview.bookId} 
+            onSubmit={handleForwardToCommunity} 
+            onCancel={() => setShowPreview(null)} 
+            lang={lang} 
+          />
+        </Modal>
+      )}
+
+      {isSaving && (
+        <div className="fixed inset-0 bg-white/80 backdrop-blur-sm z-[100] flex flex-col items-center justify-center">
+          <div className="w-12 h-12 border-4 border-accent border-t-transparent rounded-full animate-spin mb-4"></div>
+          <p className="text-sm font-serif tracking-widest text-ink/60">{t.saving}</p>
+        </div>
       )}
     </div>
   );
@@ -382,19 +495,40 @@ function UserProfile({ t, user, onBack }: { t: any, user: User, onBack: () => vo
   const [posts, setPosts] = useState<CommunityPost[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const handleExportData = async () => {
+    try {
+      const data = {
+        user,
+        books,
+        posts,
+        exportedAt: new Date().toISOString()
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `watercloud_backup_${user.nickname}_${new Date().toISOString().split('T')[0]}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export error:', error);
+    }
+  };
+
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
-      const [booksRes, postsRes] = await Promise.all([
-        fetch(`/api/books?userId=${user.id}`),
-        fetch(`/api/users/${user.id}/posts`)
-      ]);
-      const [booksData, postsData] = await Promise.all([
-        booksRes.json(),
-        postsRes.json()
-      ]);
-      setBooks(booksData);
-      setPosts(postsData);
+      try {
+        const qBooks = query(collection(db, 'books'), where('authorUid', '==', user.id));
+        const booksSnap = await getDocs(qBooks);
+        setBooks(booksSnap.docs.map(d => ({ id: d.id, ...d.data() } as Book)));
+
+        const qPosts = query(collection(db, 'community_posts'), where('authorUid', '==', user.id));
+        const postsSnap = await getDocs(qPosts);
+        setPosts(postsSnap.docs.map(d => ({ id: d.id, ...d.data() } as CommunityPost)));
+      } catch (e) {
+        console.error(e);
+      }
       setLoading(false);
     };
     fetchData();
@@ -414,7 +548,15 @@ function UserProfile({ t, user, onBack }: { t: any, user: User, onBack: () => vo
       <div className="flex flex-col items-center mb-16">
         <img src={user.avatar} className="w-24 h-24 rounded-full border-4 border-accent/20 p-1 mb-4 object-cover shadow-xl" referrerPolicy="no-referrer" />
         <h2 className="text-3xl font-serif mb-2">{user.nickname}</h2>
-        <div className="h-1 w-12 bg-accent"></div>
+        <div className="h-1 w-12 bg-accent mb-6"></div>
+        
+        <button 
+          onClick={handleExportData}
+          className="flex items-center gap-2 px-4 py-2 border border-black/10 text-[10px] uppercase tracking-widest hover:bg-ink hover:text-white transition-all"
+        >
+          <Download size={14} />
+          {t.exportData}
+        </button>
       </div>
 
       {loading ? (
@@ -453,7 +595,7 @@ function UserProfile({ t, user, onBack }: { t: any, user: User, onBack: () => vo
                       <div>
                         <h4 className="text-xl font-serif mb-1">{post.entry_title || "无题"}</h4>
                         <span className="text-[10px] uppercase tracking-widest opacity-40">
-                          {new Date(post.created_at).toLocaleDateString()} · 来自《{post.book_title}》
+                          {new Date(post.createdAt).toLocaleDateString()} · 来自《{post.book_title}》
                         </span>
                       </div>
                     </div>
@@ -526,10 +668,16 @@ function Onboarding({ t, onComplete }: { t: any, onComplete: (n: string, a: stri
         <button 
           onClick={() => nickname && onComplete(nickname, avatar)}
           disabled={!nickname}
-          className="w-full py-4 bg-accent text-white rounded-sm font-serif text-xl tracking-widest disabled:opacity-50 hover:bg-accent/90 transition-colors"
+          className="w-full py-4 bg-accent text-white rounded-sm font-serif text-xl tracking-widest disabled:opacity-50 hover:bg-accent/90 transition-colors shadow-lg"
         >
           {t.enter}
         </button>
+      </div>
+
+      <div className="mt-16 pt-8 border-t border-black/5">
+        <p className="text-[10px] text-ink/30 italic leading-relaxed">
+          {t.persistenceWarning}
+        </p>
       </div>
     </motion.div>
   );
@@ -542,6 +690,12 @@ function Home({ t, books, onAddBook, onSelectBook }: { t: any, books: Book[], on
       animate={{ opacity: 1 }}
       className="max-w-4xl mx-auto p-6"
     >
+      <div className="bg-accent/5 border border-accent/10 p-4 mb-8 rounded-sm">
+        <p className="text-[10px] text-accent/60 italic text-center">
+          {t.persistenceWarning}
+        </p>
+      </div>
+
       <div className="flex justify-between items-end mb-12">
         <div>
           <h2 className="text-4xl font-serif">{t.myBooks}</h2>
@@ -585,7 +739,7 @@ function Home({ t, books, onAddBook, onSelectBook }: { t: any, books: Book[], on
   );
 }
 
-function BookDetail({ t, book, entries, onBack, onAddEntry, onForward, lang }: { t: any, book: Book, entries: Entry[], onBack: () => void, onAddEntry: () => void, onForward: (entryId: number) => void, lang: Language }) {
+function BookDetail({ t, book, entries, onBack, onAddEntry, onForward, lang }: { t: any, book: Book, entries: Entry[], onBack: () => void, onAddEntry: () => void, onForward: (entryId: string) => void, lang: Language }) {
   return (
     <motion.div 
       initial={{ opacity: 0, x: 20 }}
@@ -621,7 +775,7 @@ function BookDetail({ t, book, entries, onBack, onAddEntry, onForward, lang }: {
             <div className="flex justify-between items-start mb-4">
               <div>
                 <h4 className="text-2xl font-serif mb-1">{entry.title}</h4>
-                <span className="text-[10px] uppercase tracking-widest opacity-40">{new Date(entry.created_at).toLocaleDateString()}</span>
+                <span className="text-[10px] uppercase tracking-widest opacity-40">{new Date(entry.createdAt).toLocaleDateString()}</span>
               </div>
               <button 
                 onClick={() => onForward(entry.id)}
@@ -655,7 +809,13 @@ function BookDetail({ t, book, entries, onBack, onAddEntry, onForward, lang }: {
   );
 }
 
-function Community({ t, posts, onSelectPost, onLike, onSelectUser }: { t: any, posts: CommunityPost[], onSelectPost: (p: CommunityPost) => any, onLike: (id: number) => any, onSelectUser: (u: User) => void }) {
+function Community({ t, posts, onSelectPost, onLike, onSelectUser }: { t: any, posts: CommunityPost[], onSelectPost: (p: CommunityPost) => any, onLike: (id: string) => any, onSelectUser: (u: User) => void }) {
+  const sortedPosts = [...posts].sort((a, b) => {
+    if (a.isPinned && !b.isPinned) return -1;
+    if (!a.isPinned && b.isPinned) return 1;
+    return 0;
+  });
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
@@ -669,8 +829,14 @@ function Community({ t, posts, onSelectPost, onLike, onSelectUser }: { t: any, p
       </div>
 
       <div className="space-y-8">
-        {posts.map(post => (
-          <div key={post.id} className="retro-card p-6 rounded-sm cursor-pointer hover:shadow-xl transition-all" onClick={() => onSelectPost(post)}>
+        {sortedPosts.map(post => (
+          <div key={post.id} className={`retro-card p-6 rounded-sm cursor-pointer hover:shadow-xl transition-all relative ${post.isPinned ? 'border-l-4 border-accent' : ''}`} onClick={() => onSelectPost(post)}>
+            {post.isPinned && (
+              <div className="absolute top-4 right-4 text-accent flex items-center gap-1">
+                <Pin size={14} className="rotate-45" />
+                <span className="text-[10px] uppercase tracking-widest font-bold">{t.pinned}</span>
+              </div>
+            )}
             <div className="flex items-center gap-3 mb-4">
               <img 
                 src={post.avatar} 
@@ -678,15 +844,15 @@ function Community({ t, posts, onSelectPost, onLike, onSelectUser }: { t: any, p
                 referrerPolicy="no-referrer" 
                 onClick={(e) => {
                   e.stopPropagation();
-                  onSelectUser({ id: post.user_id, nickname: post.nickname, avatar: post.avatar });
+                  onSelectUser({ id: post.authorUid, nickname: post.nickname, avatar: post.avatar });
                 }}
               />
               <div onClick={(e) => {
                   e.stopPropagation();
-                  onSelectUser({ id: post.user_id, nickname: post.nickname, avatar: post.avatar });
+                  onSelectUser({ id: post.authorUid, nickname: post.nickname, avatar: post.avatar });
                 }} className="hover:text-accent transition-colors">
                 <h5 className="font-serif text-sm">{post.nickname}</h5>
-                <span className="text-[10px] opacity-40 uppercase tracking-widest">{new Date(post.created_at).toLocaleDateString()}</span>
+                <span className="text-[10px] opacity-40 uppercase tracking-widest">{new Date(post.createdAt).toLocaleDateString()}</span>
               </div>
             </div>
 
@@ -735,52 +901,54 @@ function PostDetail({ t, post, user, onBack, onSelectUser }: { t: any, post: Com
   const [showAddAnnotation, setShowAddAnnotation] = useState(false);
 
   useEffect(() => {
-    fetchAnnotations();
-    fetchComments();
+    const qAnn = query(collection(db, 'annotations'), where('postId', '==', post.id), orderBy('createdAt', 'asc'));
+    const unsubAnn = onSnapshot(qAnn, async (snap) => {
+      const data = await Promise.all(snap.docs.map(async (d) => {
+        const authorDoc = await getDoc(doc(db, 'users', d.data().authorUid));
+        const authorData = authorDoc.data();
+        return { id: d.id, ...d.data(), nickname: authorData?.nickname, avatar: authorData?.avatar } as Annotation;
+      }));
+      setAnnotations(data);
+    });
+
+    const qComm = query(collection(db, 'comments'), where('targetId', '==', post.id), orderBy('createdAt', 'asc'));
+    const unsubComm = onSnapshot(qComm, async (snap) => {
+      const data = await Promise.all(snap.docs.map(async (d) => {
+        const authorDoc = await getDoc(doc(db, 'users', d.data().authorUid));
+        const authorData = authorDoc.data();
+        return { id: d.id, ...d.data(), nickname: authorData?.nickname, avatar: authorData?.avatar } as Comment;
+      }));
+      setComments(data);
+    });
+
+    return () => {
+      unsubAnn();
+      unsubComm();
+    };
   }, [post.id]);
-
-  const fetchAnnotations = async () => {
-    const res = await fetch(`/api/community/${post.id}/annotations`);
-    const data = await res.json();
-    setAnnotations(data);
-  };
-
-  const fetchComments = async () => {
-    const res = await fetch(`/api/community/${post.id}/comments`);
-    const data = await res.json();
-    setComments(data);
-  };
 
   const handleAddComment = async () => {
     if (!user || !newComment) return;
-    await fetch('/api/comments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        postId: post.id,
-        userId: user.id,
-        content: newComment
-      })
+    await addDoc(collection(db, 'comments'), {
+      targetId: post.id,
+      authorUid: user.id,
+      content: newComment,
+      createdAt: new Date().toISOString()
     });
     setNewComment('');
-    fetchComments();
   };
 
   const handleAddAnnotation = async () => {
     if (!user || selectedSentence === null || !newAnnotation) return;
-    await fetch('/api/annotations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        postId: post.id,
-        userId: user.id,
-        sentenceIndex: selectedSentence,
-        content: newAnnotation
-      })
+    await addDoc(collection(db, 'annotations'), {
+      postId: post.id,
+      authorUid: user.id,
+      sentenceIndex: selectedSentence,
+      content: newAnnotation,
+      createdAt: new Date().toISOString()
     });
     setNewAnnotation('');
     setShowAddAnnotation(false);
-    fetchAnnotations();
   };
 
   // Split content into sentences (basic heuristic)
@@ -804,11 +972,11 @@ function PostDetail({ t, post, user, onBack, onSelectUser }: { t: any, post: Com
             src={post.avatar} 
             className="w-12 h-12 rounded-full border border-black/5 cursor-pointer hover:ring-2 hover:ring-accent transition-all" 
             referrerPolicy="no-referrer" 
-            onClick={() => onSelectUser({ id: post.user_id, nickname: post.nickname, avatar: post.avatar })}
+            onClick={() => onSelectUser({ id: post.authorUid, nickname: post.nickname, avatar: post.avatar })}
           />
-          <div className="cursor-pointer hover:text-accent transition-colors" onClick={() => onSelectUser({ id: post.user_id, nickname: post.nickname, avatar: post.avatar })}>
+          <div className="cursor-pointer hover:text-accent transition-colors" onClick={() => onSelectUser({ id: post.authorUid, nickname: post.nickname, avatar: post.avatar })}>
             <h5 className="font-serif text-lg">{post.nickname}</h5>
-            <span className="text-xs opacity-40 uppercase tracking-widest">{new Date(post.created_at).toLocaleString()}</span>
+            <span className="text-xs opacity-40 uppercase tracking-widest">{new Date(post.createdAt).toLocaleString()}</span>
           </div>
         </div>
 
@@ -827,7 +995,7 @@ function PostDetail({ t, post, user, onBack, onSelectUser }: { t: any, post: Com
               className={`cursor-pointer transition-all hover:bg-accent/10 p-1 rounded-sm relative group ${selectedSentence === idx ? 'bg-accent/20' : ''}`}
             >
               {sentence}
-              {annotations.some(a => a.sentence_index === idx) && (
+              {annotations.some(a => a.sentenceIndex === idx) && (
                 <span className="absolute -top-1 -right-1 w-2 h-2 bg-accent rounded-full shadow-[0_0_8px_rgba(242,125,38,0.6)]" />
               )}
             </span>
@@ -864,9 +1032,9 @@ function PostDetail({ t, post, user, onBack, onSelectUser }: { t: any, post: Com
                   <div className="flex items-center gap-2 mb-2">
                     <img src={ann.avatar} className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
                     <span className="text-xs font-serif">{ann.nickname}</span>
-                    <span className="text-[10px] opacity-40">批注了第 {ann.sentence_index + 1} 句</span>
+                    <span className="text-[10px] opacity-40">批注了第 {ann.sentenceIndex + 1} 句</span>
                   </div>
-                  <p className="text-sm italic mb-2 opacity-60">"{sentences[ann.sentence_index]}"</p>
+                  <p className="text-sm italic mb-2 opacity-60">"{sentences[ann.sentenceIndex]}"</p>
                   <p className="text-sm">{ann.content}</p>
                 </div>
               ))}
@@ -883,7 +1051,7 @@ function PostDetail({ t, post, user, onBack, onSelectUser }: { t: any, post: Com
                 <div className="flex-1 bg-white/50 p-4 rounded-sm text-sm shadow-sm">
                   <div className="flex justify-between mb-2">
                     <span className="font-serif text-xs">{c.nickname}</span>
-                    <span className="text-[10px] opacity-40">{new Date(c.created_at).toLocaleString()}</span>
+                    <span className="text-[10px] opacity-40">{new Date(c.createdAt).toLocaleString()}</span>
                   </div>
                   <p className="leading-relaxed">{c.content}</p>
                 </div>
@@ -949,11 +1117,11 @@ interface ActivityCardProps {
   isPast?: boolean;
   t: any;
   user: User | null;
-  onParticipate: (id: number, n: string) => any;
+  onParticipate: (id: string, n: string) => any;
   isCommentsOpen: boolean;
   comments: ActivityComment[];
   onToggleComments: () => void;
-  onAddComment: (id: number) => void;
+  onAddComment: (id: string) => void;
   newComment: string;
   setNewComment: (s: string) => void;
   lang: Language;
@@ -974,7 +1142,7 @@ function ActivityCard({
   lang
 }: ActivityCardProps) {
   const [nickname, setNickname] = useState('');
-  const posters: string[] = JSON.parse(activity.posters || '[]');
+  const posters: string[] = Array.isArray(activity.posters) ? activity.posters : JSON.parse(activity.posters || '[]');
 
   return (
     <div className={`relative p-8 border-2 rounded-sm bg-accent/5 transition-all ${isPast ? 'border-black/10 grayscale-[0.5] opacity-80' : 'border-accent/20 shadow-lg'}`}>
@@ -1076,7 +1244,7 @@ function ActivityCard({
                 <div className="flex-1 bg-white/50 p-3 rounded-sm text-sm">
                   <div className="flex justify-between mb-1">
                     <span className="font-serif text-xs">{c.nickname}</span>
-                    <span className="text-[10px] opacity-40">{new Date(c.created_at).toLocaleDateString()}</span>
+                    <span className="text-[10px] opacity-40">{new Date(c.createdAt).toLocaleDateString()}</span>
                   </div>
                   <p>{c.content}</p>
                 </div>
@@ -1106,8 +1274,8 @@ function ActivityCard({
   );
 }
 
-function Activities({ t, activities, user, onParticipate, onAddActivity, lang }: { t: any, activities: Activity[], user: User | null, onParticipate: (id: number, n: string) => any, onAddActivity: () => void, lang: Language }) {
-  const [activeComments, setActiveComments] = useState<number | null>(null);
+function Activities({ t, activities, user, onParticipate, onAddActivity, lang }: { t: any, activities: Activity[], user: User | null, onParticipate: (id: string, n: string) => any, onAddActivity: () => void, lang: Language }) {
+  const [activeComments, setActiveComments] = useState<string | null>(null);
   const [comments, setComments] = useState<ActivityComment[]>([]);
   const [newComment, setNewComment] = useState('');
 
@@ -1121,22 +1289,29 @@ function Activities({ t, activities, user, onParticipate, onAddActivity, lang }:
     return !isNaN(d.getTime()) && d < now;
   });
 
-  const fetchComments = async (id: number) => {
-    const res = await fetch(`/api/activities/${id}/comments`);
-    const data = await res.json();
-    setComments(data);
-    setActiveComments(id);
-  };
+  useEffect(() => {
+    if (!activeComments) return;
+    const q = query(collection(db, 'comments'), where('targetId', '==', activeComments), orderBy('createdAt', 'asc'));
+    const unsub = onSnapshot(q, async (snap) => {
+      const data = await Promise.all(snap.docs.map(async (d) => {
+        const authorDoc = await getDoc(doc(db, 'users', d.data().authorUid));
+        const authorData = authorDoc.data();
+        return { id: d.id, ...d.data(), nickname: authorData?.nickname, avatar: authorData?.avatar } as ActivityComment;
+      }));
+      setComments(data);
+    });
+    return () => unsub();
+  }, [activeComments]);
 
-  const handleAddComment = async (id: number) => {
+  const handleAddComment = async (id: string) => {
     if (!user || !newComment) return;
-    await fetch('/api/activity-comments', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activityId: id, userId: user.id, content: newComment })
+    await addDoc(collection(db, 'comments'), {
+      targetId: id,
+      authorUid: user.id,
+      content: newComment,
+      createdAt: new Date().toISOString()
     });
     setNewComment('');
-    fetchComments(id);
   };
 
   return (
@@ -1174,7 +1349,7 @@ function Activities({ t, activities, user, onParticipate, onAddActivity, lang }:
                 onParticipate={onParticipate}
                 isCommentsOpen={activeComments === activity.id}
                 comments={activeComments === activity.id ? comments : []}
-                onToggleComments={() => activeComments === activity.id ? setActiveComments(null) : fetchComments(activity.id)}
+                onToggleComments={() => activeComments === activity.id ? setActiveComments(null) : setActiveComments(activity.id)}
                 onAddComment={handleAddComment}
                 newComment={newComment}
                 setNewComment={setNewComment}
@@ -1196,7 +1371,7 @@ function Activities({ t, activities, user, onParticipate, onAddActivity, lang }:
                 onParticipate={onParticipate}
                 isCommentsOpen={activeComments === activity.id}
                 comments={activeComments === activity.id ? comments : []}
-                onToggleComments={() => activeComments === activity.id ? setActiveComments(null) : fetchComments(activity.id)}
+                onToggleComments={() => activeComments === activity.id ? setActiveComments(null) : setActiveComments(activity.id)}
                 onAddComment={handleAddComment}
                 newComment={newComment}
                 setNewComment={setNewComment}
@@ -1219,12 +1394,13 @@ function AddActivityForm({ t, onSubmit, onCancel, isSaving, lang }: { t: any, on
   const [posters, setPosters] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setPosters([...posters, reader.result as string]);
+      reader.onloadend = async () => {
+        const compressed = await compressImage(reader.result as string);
+        setPosters([...posters, compressed]);
       };
       reader.readAsDataURL(file);
     }
@@ -1346,12 +1522,13 @@ function AddBookForm({ t, onSubmit, onCancel, isSaving, lang }: { t: any, onSubm
   const [cover, setCover] = useState('https://picsum.photos/seed/book/300/400');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setCover(reader.result as string);
+      reader.onloadend = async () => {
+        const compressed = await compressImage(reader.result as string);
+        setCover(compressed);
       };
       reader.readAsDataURL(file);
     }
@@ -1417,7 +1594,7 @@ function AddBookForm({ t, onSubmit, onCancel, isSaving, lang }: { t: any, onSubm
   );
 }
 
-function AddEntryForm({ t, onSubmit, onCancel }: { t: any, onSubmit: (t: string, c: string, i: string, f: string) => void, onCancel: () => void }) {
+function AddEntryForm({ t, onSubmit, onCancel, lang }: { t: any, onSubmit: (t: string, c: string, i: string, f: string) => void, onCancel: () => void, lang: Language }) {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [feelings, setFeelings] = useState('');
@@ -1439,21 +1616,34 @@ function AddEntryForm({ t, onSubmit, onCancel }: { t: any, onSubmit: (t: string,
     }
   };
 
-  const capturePhoto = () => {
+  const capturePhoto = async () => {
     if (videoRef.current && canvasRef.current) {
       const context = canvasRef.current.getContext('2d');
       if (context) {
         canvasRef.current.width = videoRef.current.videoWidth;
         canvasRef.current.height = videoRef.current.videoHeight;
         context.drawImage(videoRef.current, 0, 0);
-        const dataUrl = canvasRef.current.toDataURL('image/jpeg');
-        setImage(dataUrl);
+        const dataUrl = canvasRef.current.toDataURL('image/jpeg', 0.4);
+        const compressed = await compressImage(dataUrl);
+        setImage(compressed);
         
         // Stop camera
         const stream = videoRef.current.srcObject as MediaStream;
         stream.getTracks().forEach(track => track.stop());
         setMode('input');
       }
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const compressed = await compressImage(reader.result as string);
+        setImage(compressed);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
@@ -1483,6 +1673,11 @@ function AddEntryForm({ t, onSubmit, onCancel }: { t: any, onSubmit: (t: string,
           <Camera size={14} />
           {t.takePhoto}
         </button>
+        <label className="flex-1 py-2 text-xs uppercase tracking-widest border flex items-center justify-center gap-2 border-black/10 opacity-50 cursor-pointer hover:opacity-100 transition-opacity">
+          <ImageIcon size={14} />
+          {lang === 'zh' ? '相册' : 'Gallery'}
+          <input type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+        </label>
       </div>
 
       {mode === 'camera' ? (
@@ -1576,6 +1771,64 @@ function ForwardForm({ t, onSubmit, onCancel }: { t: any, onSubmit: (type: 'read
           className="flex-1 py-3 bg-accent text-white font-serif tracking-widest"
         >
           {t.forward}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PostPreview({ t, entryId, bookId, onSubmit, onCancel, lang }: { t: any, entryId: string, bookId: string, onSubmit: (entryId: string, content: string) => void, onCancel: () => void, lang: Language }) {
+  const [entry, setEntry] = useState<Entry | null>(null);
+  const [comment, setComment] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchEntry = async () => {
+      const docRef = doc(db, 'entries', entryId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        setEntry({ id: docSnap.id, ...docSnap.data() } as Entry);
+      }
+      setLoading(false);
+    };
+    fetchEntry();
+  }, [entryId]);
+
+  if (loading) return <div className="py-20 text-center italic opacity-40">Loading...</div>;
+  if (!entry) return null;
+
+  return (
+    <div className="space-y-6">
+      <div className="retro-card p-6 rounded-sm bg-paper/50">
+        <h4 className="text-xl font-serif mb-2">{entry.title}</h4>
+        <p className="text-sm italic opacity-70 border-l-2 border-accent/30 pl-4 mb-4 line-clamp-4">{entry.content}</p>
+        {entry.image && (
+          <img src={entry.image} className="w-full aspect-video object-cover rounded-sm mb-4" referrerPolicy="no-referrer" />
+        )}
+      </div>
+
+      <div>
+        <label className="text-[10px] uppercase tracking-widest opacity-50 block mb-2">{lang === 'zh' ? '添加感悟 (Add thoughts)' : 'Add thoughts'}</label>
+        <textarea 
+          value={comment}
+          onChange={e => setComment(e.target.value)}
+          className="w-full bg-transparent border border-black/10 p-4 outline-none focus:border-accent font-serif text-sm min-h-[100px]"
+          placeholder={lang === 'zh' ? '写下你此刻的想法...' : 'Write your thoughts...'}
+        />
+      </div>
+
+      <div className="flex gap-4">
+        <button 
+          onClick={onCancel}
+          className="flex-1 py-3 border border-black/10 text-xs uppercase tracking-widest hover:bg-black/5 transition-colors"
+        >
+          {t.cancel}
+        </button>
+        <button 
+          onClick={() => onSubmit(entryId, comment)}
+          className="flex-1 py-3 bg-accent text-white font-serif tracking-widest hover:bg-accent/90 transition-colors shadow-lg"
+        >
+          {t.share}
         </button>
       </div>
     </div>

@@ -1,6 +1,6 @@
 {
-  "name": "水云 - 怀旧书志 (WaterCloud - Retro Journal)",
-  "description": "一个具有复古情怀的私人书志与文学社区，支持书籍创作、图文记录及社区互动。 (A nostalgic book journal and literary community for personal writing and social sharing.)",
+  "name": "水云",
+  "description": "A powerful full-stack spreadsheet and data management application. (一个功能强大的全栈电子表格与数据管理应用。)",
   "requestFramePermissions": [
     "camera"
   ]

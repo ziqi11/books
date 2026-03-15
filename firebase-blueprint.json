@@ -1,0 +1,120 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "nickname": { "type": "string", "description": "User's display name" },
+        "avatar": { "type": "string", "description": "User's avatar image URL or base64" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Account creation time" }
+      },
+      "required": ["nickname", "createdAt"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "Literary club activity",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string", "description": "UID of the creator" },
+        "title": { "type": "string", "description": "Activity title" },
+        "announcement": { "type": "string", "description": "Activity announcement text" },
+        "location": { "type": "string", "description": "Activity location" },
+        "time": { "type": "string", "description": "Activity time" },
+        "posters": { "type": "array", "items": { "type": "string" }, "description": "List of poster URLs" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "title", "createdAt"]
+    },
+    "Book": {
+      "title": "Book",
+      "description": "A collection of entries",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string" },
+        "title": { "type": "string" },
+        "cover": { "type": "string" },
+        "description": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "title", "createdAt"]
+    },
+    "Entry": {
+      "title": "Entry",
+      "description": "A single piece of writing in a book",
+      "type": "object",
+      "properties": {
+        "bookId": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "image": { "type": "string" },
+        "feelings": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["bookId", "createdAt"]
+    },
+    "CommunityPost": {
+      "title": "CommunityPost",
+      "description": "A post shared in the community",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string" },
+        "bookId": { "type": "string" },
+        "entryId": { "type": "string" },
+        "type": { "type": "string", "enum": ["essay", "quote"] },
+        "content": { "type": "string" },
+        "likes": { "type": "number" },
+        "isPinned": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["authorUid", "type", "createdAt"]
+    },
+    "Annotation": {
+      "title": "Annotation",
+      "description": "Line-by-line annotation on a post",
+      "type": "object",
+      "properties": {
+        "postId": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "sentenceIndex": { "type": "number" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["postId", "authorUid", "sentenceIndex", "content", "createdAt"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Comment on a post or activity",
+      "type": "object",
+      "properties": {
+        "targetId": { "type": "string", "description": "ID of post or activity" },
+        "authorUid": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["targetId", "authorUid", "content", "createdAt"]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "Activity participant",
+      "type": "object",
+      "properties": {
+        "activityId": { "type": "string" },
+        "authorUid": { "type": "string" },
+        "nickname": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["activityId", "authorUid", "nickname", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": { "schema": "User", "description": "User profiles" },
+    "activities/{activityId}": { "schema": "Activity", "description": "Club activities" },
+    "books/{bookId}": { "schema": "Book", "description": "User books" },
+    "entries/{entryId}": { "schema": "Entry", "description": "Book entries" },
+    "community_posts/{postId}": { "schema": "CommunityPost", "description": "Shared posts" },
+    "annotations/{annotationId}": { "schema": "Annotation", "description": "Post annotations" },
+    "comments/{commentId}": { "schema": "Comment", "description": "Comments" },
+    "activity_participants/{participantId}": { "schema": "Participant", "description": "Activity participants" }
+  }
+}

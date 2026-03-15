@@ -1,37 +1,38 @@
 export interface User {
-  id: number;
+  id: string;
   nickname: string;
   avatar: string;
 }
 
 export interface Book {
-  id: number;
-  user_id: number;
+  id: string;
+  authorUid: string;
   title: string;
   cover: string;
   description: string;
-  created_at: string;
+  createdAt: string;
 }
 
 export interface Entry {
-  id: number;
-  book_id: number;
+  id: string;
+  bookId: string;
   title: string;
   content: string;
   image: string;
   feelings: string;
-  created_at: string;
+  createdAt: string;
 }
 
 export interface CommunityPost {
-  id: number;
-  user_id: number;
-  book_id: number;
-  entry_id: number;
+  id: string;
+  authorUid: string;
+  bookId: string;
+  entryId: string;
   type: string;
   content: string;
   likes: number;
-  created_at: string;
+  isPinned?: boolean;
+  createdAt: string;
   nickname: string;
   avatar: string;
   book_title?: string;
@@ -41,46 +42,46 @@ export interface CommunityPost {
 }
 
 export interface Comment {
-  id: number;
-  post_id: number;
-  user_id: number;
+  id: string;
+  targetId: string;
+  authorUid: string;
   content: string;
-  created_at: string;
+  createdAt: string;
   nickname: string;
   avatar: string;
 }
 
 export interface Activity {
-  id: number;
-  user_id?: number;
+  id: string;
+  authorUid?: string;
   title: string;
   announcement: string;
   location: string;
   time: string;
-  posters: string; // JSON string of array
-  created_at: string;
+  posters: string | string[]; // Can be JSON string or array
+  createdAt: string;
   author_nickname?: string;
   author_avatar?: string;
-  participants?: { nickname: string, user_id: number }[];
+  participants?: { nickname: string, user_id: string }[];
 }
 
 export interface Annotation {
-  id: number;
-  post_id: number;
-  user_id: number;
-  sentence_index: number;
+  id: string;
+  postId: string;
+  authorUid: string;
+  sentenceIndex: number;
   content: string;
-  created_at: string;
+  createdAt: string;
   nickname: string;
   avatar: string;
 }
 
 export interface ActivityComment {
-  id: number;
-  activity_id: number;
-  user_id: number;
+  id: string;
+  targetId: string;
+  authorUid: string;
   content: string;
-  created_at: string;
+  createdAt: string;
   nickname: string;
   avatar: string;
 }
